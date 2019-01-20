@@ -57,14 +57,18 @@ fun march(
             maxEstimatedDistance = maxEstimatedDistance
         )
         if (estimatedDistance <= hitDistance) {
-            val probePosition = currentPosition - direction.normalized * hitDistance
             val probeDistance = hitDistance / 2
-            val left = distanceEstimator(probePosition + Point.left * probeDistance).distance
-            val right = distanceEstimator(probePosition + Point.right * probeDistance).distance
-            val up = distanceEstimator(probePosition + Point.up * probeDistance).distance
-            val down = distanceEstimator(probePosition + Point.down * probeDistance).distance
-            val forward = distanceEstimator(probePosition + Point.forward * probeDistance).distance
-            val backward = distanceEstimator(probePosition + Point.backward * probeDistance).distance
+            val probePosition = currentPosition - direction.normalized * probeDistance
+            fun probe(probeDirection: Point) = estimate.shape
+                .distanceEstimator(probePosition + probeDirection * probeDistance)
+                .distance
+
+            val left = probe(Point.left)
+            val right = probe(Point.right)
+            val up = probe(Point.up)
+            val down = probe(Point.down)
+            val forward = probe(Point.forward)
+            val backward = probe(Point.backward)
             return RayMarchHit(
                 hitPoint = currentPosition,
                 hitNormal = Point(right - left, up - down, forward - backward).normalized,

@@ -1,5 +1,7 @@
 package de.lostmekka.raymarcher
 
+import kotlin.math.max
+
 abstract class Light(
     val position: Point,
     val minDistance: Double,
@@ -9,22 +11,24 @@ abstract class Light(
     private val distanceDifference = maxDistance - minDistance
     protected abstract fun directionToLightFrom(point: Point): Point
     protected abstract fun distanceToLightFrom(point: Point): Double
-    fun hardShadowedIntensityAt(point: Point, normal: Point, sceneDistanceEstimator: DistanceEstimator, sceneHitDistance: Double): Double {
+    fun hardShadowedIntensityAt(point: Point, normal: Point, geometry: Geometry, sceneHitDistance: Double): Double {
         val direction = directionToLightFrom(point)
+        val distanceToLight = distanceToLightFrom(point)
         val marchResult = march(
             start = point,
             direction = direction,
-            maxDistance = distanceToLightFrom(point),
-            distanceEstimator = sceneDistanceEstimator,
+            maxDistance = distanceToLight,
+            geometry = geometry,
             hitDistance = sceneHitDistance,
             minFirstStepLength = sceneHitDistance * 10
         )
         return when (marchResult) {
             is RayMarchHit -> 0.0
             is RayMarchMiss -> {
-                val distanceMultiplier = 1.0 - ((point distanceTo position) - minDistance) / distanceDifference
+                val distanceMultiplier = 1.0 - ((distanceToLight - minDistance) / distanceDifference).coerceIn(0.0, 1.0)
+//                val normalMultiplier = 1.0
                 val normalMultiplier = normal dot direction.normalized
-                intensity * distanceMultiplier * normalMultiplier
+                max(0.0, intensity * distanceMultiplier * normalMultiplier)
             }
         }
     }

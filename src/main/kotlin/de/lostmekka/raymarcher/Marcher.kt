@@ -33,7 +33,7 @@ fun march(
     maxDistance: Double,
     hitDistance: Double,
     minFirstStepLength: Double = .0,
-    distanceEstimator: DistanceEstimator
+    geometry: Geometry
 ): RayMarchResult {
     var currentPosition = start
     var estimatedDistance: Double
@@ -41,7 +41,7 @@ fun march(
     var minEstimatedDistance = Double.MAX_VALUE
     var maxEstimatedDistance = Double.MIN_VALUE
     while (true) {
-        val estimate = distanceEstimator(currentPosition)
+        val estimate = geometry.estimateDistanceTo(currentPosition)
         estimatedDistance = if (marchCount == 0 && minFirstStepLength > 0) {
             minFirstStepLength
         } else {
@@ -60,7 +60,7 @@ fun march(
             val probeDistance = hitDistance / 2
             val probePosition = currentPosition - direction.normalized * probeDistance
             fun probe(probeDirection: Point) = estimate.shape
-                .distanceEstimator(probePosition + probeDirection * probeDistance)
+                .estimateDistanceTo(probePosition + probeDirection * probeDistance)
                 .distance
 
             val left = probe(Point.left)

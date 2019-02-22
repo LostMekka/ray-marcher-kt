@@ -1,45 +1,132 @@
 package de.lostmekka.raymarcher
 
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import java.awt.image.BufferedImage
 import java.io.File
+import java.util.concurrent.Executors
 import javax.imageio.ImageIO
-import kotlin.math.roundToInt
-import kotlin.math.sin
+import kotlin.math.*
 
-fun main(args: Array<String>) {
-    val startTime = System.currentTimeMillis()
-
-    val count = 100
-    for (i in (0 until count)) {
-        println("drawing image ${i + 1} of $count...")
-        val fraction = i.toDouble() / (count - 1)
-        val image = drawImage(fraction)
-        val numberInName = i.toString().padStart(3, '0')
-        ImageIO.write(image, "png", File("out_$numberInName.png"))
+private suspend fun BufferedImage.write(fileName: String = "out", path: String = ".", format: String = "png") {
+    val pathWithoutTrailingSlash = path.trimEnd('/', '\\')
+    val fullFilePath = "$pathWithoutTrailingSlash/$fileName.$format"
+    withContext(Dispatchers.IO) {
+        ImageIO.write(this@write, format, File(fullFilePath))
     }
-//    val image = drawImage(0.0)
-//    ImageIO.write(image, "png", File("out.png"))
+}
 
-    val endTime = System.currentTimeMillis()
-    val timeSpent = (endTime - startTime) / 1_000f
+private suspend fun measureSeconds(body: suspend () -> Unit): Double {
+    val start = System.currentTimeMillis()
+    body()
+    val end = System.currentTimeMillis()
+    return 0.001 * (end - start)
+}
+
+private suspend fun measureMilliSeconds(body: suspend () -> Unit): Long {
+    val start = System.currentTimeMillis()
+    body()
+    val end = System.currentTimeMillis()
+    return end - start
+}
+
+private suspend fun <T : Any> measureMilliSecondsWithAnswer(body: suspend () -> T): Pair<Long, T> {
+    var answer: T? = null
+    val time = measureMilliSeconds { answer = body() }
+    return Pair(time, answer!!)
+}
+
+fun main() = runBlocking {
+    val imageScaling = 0.2
+    val pixelSize = 4
+
+    val timeSpent = measureSeconds {
+        val imageCount = 400
+        val rotationCount = 8
+
+        val maxImageIndexDigitCount = floor(log10(imageCount.toDouble())).toInt() + 1
+        fun Int.padZero(length: Int = maxImageIndexDigitCount) = toString().padStart(length, '0')
+        fun Int.padSpace(length: Int = maxImageIndexDigitCount) = toString().padStart(length, ' ')
+
+        // leaving one core alone so i can still do things while this renders
+        val threadCount = max(1, Runtime.getRuntime().availableProcessors() - 1)
+        println("auto configured $threadCount threads.")
+        val dispatcher = Executors
+            .newFixedThreadPool(threadCount)
+            .asCoroutineDispatcher()
+        var imagesCompleted = 0
+        var totalRenderCpuTime = 0L
+        val answerChannel = Channel<Long>(imageCount + 1)
+
+        println("deleting all previous output images...")
+        File(".")
+            .listFiles { _, name -> name.matches(Regex("""out_\d+\.png""")) }
+            .forEach { it.delete() }
+
+        println("scheduling $imageCount async render jobs...")
+        (0 until imageCount).map { imageIndex ->
+            launch(dispatcher) {
+                val (time, image) = measureMilliSecondsWithAnswer {
+                    drawImage(
+                        state = imageIndex.toDouble() / (imageCount - 1),
+                        imageScaling = imageScaling,
+                        pixelSize = pixelSize,
+                        rotationCount = rotationCount
+                    )
+                }
+                answerChannel.send(time)
+                val numberInName = imageIndex.toString().padStart(maxImageIndexDigitCount, '0')
+                image.write("out_$numberInName")
+            }
+        }
+
+        println("listening for render results...")
+        repeat(imageCount) {
+            val time = answerChannel.receive()
+            imagesCompleted++
+            totalRenderCpuTime += time
+            val estimate =
+                ((imageCount - imagesCompleted) * totalRenderCpuTime.toDouble() / imagesCompleted / threadCount).toInt()
+            val millis = (estimate % 1000).padZero(3)
+            val seconds = (estimate / 1000 % 60).padZero(2)
+            val minutes = (estimate / 1000 / 60 % 60).padZero(2)
+            val hours = (estimate / 1000 / 60 / 60).padZero(2)
+            println("completed ${imagesCompleted.padSpace()} images. estimated time to go: $hours:$minutes:$seconds.$millis")
+        }
+        dispatcher.close()
+
+//        val image = drawImage(0.0)
+//        ImageIO.write(image, "png", File("out.png"))
+    }
     println("done in $timeSpent seconds")
 }
 
-private fun drawImage(state: Double): BufferedImage {
+fun Double.mapWave(min: Double, max: Double, phase: Double = 0.0, frequency: Double = 1.0) =
+    (-cos(2 * Math.PI * (this * frequency + phase)) + 1) / 2 * (max - min) + min
+
+fun Double.mapLinear(min: Double, max: Double) = this / (max - min) + min
+
+private fun drawImage(state: Double, imageScaling: Double, rotationCount: Int = 1, pixelSize: Int = 1): BufferedImage {
     val floorMaterial = CheckerboardMaterial(Color(0.8), Color(0.4), 2.0)
     val scene = Scene(
         Cube(1.0, SingleColorMaterial(1.0, 0.2, 0.2)).apply {
             repeat(3) {
                 translate(-1.0, -1.0, -1.0)
-                mirrorOnPlane(Point(-0.5, 0.0, 0.0), zRotationMatrix(0.25 * sin(state * 2 * Math.PI)) * Point.left)
-                mirrorOnPlane(Point.zero, Point(1, 0, -1))
+                mirrorOnPlane(Point(-0.5, 0.0, 0.0), Point.left)
+//                mirrorOnPlane(Point(-0.5, 0.0, 0.0), zRotationMatrix(state.mapWave(-0.3, 0.0)) * Point.left)
+
+//                mirrorOnPlane(Point.zero, Point(1, 0, -1))
+                mirrorOnPlane(Point.zero, zRotationMatrix(state.mapLinear(0.0, 2.0)) * Point(1, 0, -1))
+
                 mirrorOnPlane(Point.zero, Point(0, -1, 1))
+//                mirrorOnPlane(Point.zero, zRotationMatrix(state.mapLinear(0.0, -0.5)) * Point(0, -1, 1))
+
                 mirrorOnPlane(Point.zero, Point.backward)
                 mirrorOnPlane(Point.zero, Point.down)
                 mirrorOnPlane(Point.zero, Point.left)
                 scale(1.0 / 3.0)
             }
-            rotateY(state * 2 * Math.PI)
+            rotateY(state * 2 * Math.PI * rotationCount)
         },
         Plane(Point.up, floorMaterial).apply {
             translate(Point.down * 0.6)
@@ -64,9 +151,9 @@ private fun drawImage(state: Double): BufferedImage {
     val frustumUpperLeftCorner = Point(-8.0, 4.5, 15.0) + camera
     val frustumLowerRightCorner = Point(8.0, -4.5, 15.0) + camera
 
-    val imageWidth = 1920 / 3
-    val imageHeight = 1080 / 3
-    val image = BufferedImage(imageWidth, imageHeight, BufferedImage.TYPE_INT_ARGB)
+    val imageWidth = (1920 * imageScaling).roundToInt()
+    val imageHeight = (1080 * imageScaling).roundToInt()
+    val image = BufferedImage(imageWidth * pixelSize, imageHeight * pixelSize, BufferedImage.TYPE_INT_ARGB)
 
     val frustumPixelWidth = (frustumLowerRightCorner.x - frustumUpperLeftCorner.x) / imageWidth
     val frustumPixelHeight = (frustumLowerRightCorner.y - frustumUpperLeftCorner.y) / imageHeight
@@ -101,7 +188,9 @@ private fun drawImage(state: Double): BufferedImage {
                     (lightAmount + diffuseIntensity - ambientOcclusion) * marchResult.color
                 }
             }
-            image.setRGB(x, y, color.toInt())
+            for (ix in (0 until pixelSize))
+                for (iy in (0 until pixelSize))
+                    image.setRGB(pixelSize * x + ix, pixelSize * y + iy, color.toInt())
         }
     }
     return image
